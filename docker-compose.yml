@@ -1,0 +1,88 @@
+version: '3'
+
+services:
+  zookeeper:
+    image: zookeeper:3.7.2
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - twitter_kafka
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    hostname: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+    depends_on:
+      - zookeeper
+    networks:
+      - twitter_kafka
+    healthcheck:
+      test: "nc -z localhost 9092"  # Check if the Kafka port is open
+      interval: 10s  # Check every 10 seconds
+      timeout: 10s   # Timeout after 10 seconds
+      retries: 5     # Retry 5 times before considering the service unhealthy
+
+  create_kafka_topic:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - twitter_kafka
+    command: >
+      bash -c "echo 'Creation TOPICS : ' && /usr/bin/kafka-topics --create --topic twitter_data --partitions 2 --replication-factor 1 --if-not-exists --bootstrap-server kafka:9092"
+
+  spark:
+    image: docker.io/bitnami/spark:3.5
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_USER=spark
+    ports:
+      - '8080:8080'
+      
+  spark-worker:
+    image: docker.io/bitnami/spark:3.5
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_USER=spark
+    depends_on:
+      - create_kafka_topic
+    networks:
+      - twitter_kafka
+    volumes:
+      - ./data_consumer:/app/data_consumer
+    command: bash -c "pip install -r /app/data_consumer/requirements.txt && python /app/data_consumer/kafka_consumer.py"
+
+  producer:
+    build:
+      context: ./data_producer
+    depends_on:
+      - create_kafka_topic
+    networks:
+      - twitter_kafka
+    volumes:
+      - ./data:/app/data
+
+networks:
+  twitter_kafka:
+    driver: bridge
