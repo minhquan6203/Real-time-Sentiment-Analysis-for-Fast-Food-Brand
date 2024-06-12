@@ -3,11 +3,14 @@ import json
 import logging
 from pymongo import MongoClient
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when, udf
+from pyspark.sql.functions import col, udf, array
 from pyspark.ml import PipelineModel
-from pyspark.sql.types import ArrayType, FloatType, StringType
-from pyspark.ml.linalg import DenseVector
+from pyspark.sql.types import ArrayType, FloatType, StringType, DoubleType
+from pyspark.ml.functions import vector_to_array
+import numpy as np
+import re
 import os
+
 os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages org.apache.spark:spark-streaming-kafka-0-10_2.12:3.2.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.2.0 pyspark-shell'
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,14 +33,6 @@ mongo_client = MongoClient(f'mongodb://{mongo_host}:27017')
 db = mongo_client['fb_db']
 collection = db['fb_collection']
 
-# UDF to convert DenseVector to list and calculate max probability
-def dense_vector_to_list(vector):
-    probabilities = vector.toArray().tolist()
-    max_probability = max(probabilities)
-    return probabilities, max_probability
-
-convert_udf = udf(dense_vector_to_list, ArrayType(FloatType()))
-
 # Define Kafka consumer
 consumer = KafkaConsumer(
     'fb_data',
@@ -51,34 +46,38 @@ consumer = KafkaConsumer(
 label_to_sentiment = {0: "Neutral", 1: "Positive", 2: "Negative", 3: "Irrelevant"}
 sentiment_mapping_udf = udf(lambda x: label_to_sentiment[x], StringType())
 
+# Clean the content by removing non-alphabetic characters and converting to lowercase
+def clean_content(content):
+    cleaned_content = re.sub(r'[^a-zA-Z\s]', '', content)
+    cleaned_content = cleaned_content.lower()
+    return cleaned_content
+
+# Define the softmax function
+def softmax(raw_predictions):
+    exps = np.exp(raw_predictions)
+    return (exps / exps.sum()).tolist()
+
+# Register the softmax UDF
+softmax_udf = udf(softmax, ArrayType(FloatType()))
+
+# Define a UDF to get the softmax value at the index of svm_prediction
+def get_softmax_at_index(softmax_values, index):
+    return float(softmax_values[index])
+
+get_softmax_at_index_udf = udf(get_softmax_at_index, DoubleType())
 for message in consumer:
     try:
         data = message.value
         logger.info(f"Received message: {data}")
 
-        # Adjust column names to match the model's expected input
-        data['Content'] = data.pop('Content', None)
-
-        # Create a DataFrame
+        data.update({"Cleaned Content":clean_content(data['Content'])})
         df = spark.createDataFrame([data])
-
-        # Add label column for sentiment
-        # df = df.withColumn('label', when(col('Sentiment') == 'Positive', 1)
-        #                            .when(col('Sentiment') == 'Negative', 2)
-        #                            .when(col('Sentiment') == 'Neutral', 0)
-        #                            .when(col('Sentiment') == 'Irrelevant', 3))
-
-        # Make predictions using the svm model
         predictions = svm_model.transform(df)
+        predictions = predictions.withColumn('Softmax', softmax_udf(vector_to_array(predictions['rawPrediction'])))
+        predictions = predictions.withColumn('Confidence Score', get_softmax_at_index_udf(col('Softmax'), col('svm_prediction').cast("int")))
+        predictions = predictions.withColumn('Predicted Sentiment', sentiment_mapping_udf(predictions['svm_prediction']))
         
-        # Convert DenseVector to list and find max probability
-        predictions = predictions.withColumn('Confidence', convert_udf(predictions['probability']))
-        predictions = predictions.withColumn('Confidence Score', predictions['Confidence'][1] * 100)
-
-        # Map numeric prediction to sentiment text
-        predictions = predictions.withColumn('Predicted Sentiment', sentiment_mapping_udf(predictions['prediction']))
-
-        # Select necessary columns for storage with adjusted column names
+        # Select and rename columns
         predicted_data = predictions.select(
             col('ID').alias('ID'),
             col('Entity'),
@@ -86,8 +85,8 @@ for message in consumer:
             col('Predicted Sentiment').alias('Predicted_Sentiment'),
             col('Confidence Score').alias('Confidence_Score')
         )
-
-        # Convert DataFrame to list of dictionaries to insert into MongoDB
+        
+        # Convert the DataFrame to a dictionary
         predicted_data_dict = [row.asDict() for row in predicted_data.collect()]
 
         # Store the predicted message in MongoDB

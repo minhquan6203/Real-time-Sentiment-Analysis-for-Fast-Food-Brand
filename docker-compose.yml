@@ -71,7 +71,7 @@ services:
       - fb_kafka
     volumes:
       - ./data_consumer:/app/data_consumer
-    command: bash -c "pip install -r /app/data_consumer/requirements.txt && unzip /app/data_consumer/svm_model.zip && python /app/data_consumer/kafka_consumer.py"
+    command: bash -c "pip install -r /app/data_consumer/requirements.txt && python /app/data_consumer/kafka_consumer.py"
 
   producer:
     build:
