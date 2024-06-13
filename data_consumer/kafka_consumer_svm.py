@@ -5,6 +5,7 @@
 # from pyspark.sql import SparkSession
 # from pyspark.sql.functions import col, udf, array
 # from pyspark.ml import PipelineModel
+# from pyspark.sql.functions import lit
 # from pyspark.sql.types import ArrayType, FloatType, StringType, DoubleType
 # from pyspark.ml.functions import vector_to_array
 # from pyspark import SparkConf
@@ -20,16 +21,18 @@
 # kafka_server = 'kafka:9092'
 # mongo_host = 'host.docker.internal'  # Connect to MongoDB running on the host machine
 
-# conf = SparkConf() \
-#     .set("spark.executor.memory", "4g") \
-#     .set("spark.driver.memory", "4g") \
-#     .set("spark.network.timeout", "600s") \
-#     .set("spark.executor.heartbeatInterval", "60s")
-
 # spark = SparkSession.builder \
 #     .appName("KafkaStreamWithMLPredictions") \
-#     .config(conf=conf) \
 #     .getOrCreate()
+
+# # Define Kafka consumer
+# consumer = KafkaConsumer(
+#     'fb_data',
+#     bootstrap_servers=kafka_server,
+#     auto_offset_reset='earliest',
+#     api_version=(0, 11, 5),
+#     enable_auto_commit=True,
+#     value_deserializer=lambda x: json.loads(x.decode('utf-8')))
 
 # # Load pre-trained svm model
 # svm_model_path = "/app/data_consumer/svm_model"
@@ -41,25 +44,9 @@
 # db = mongo_client['fb_db']
 # collection = db['fb_collection']
 
-# # Define Kafka consumer
-# consumer = KafkaConsumer(
-#     'fb_data',
-#     bootstrap_servers=kafka_server,
-#     auto_offset_reset='earliest',
-#     api_version=(0, 11, 5),
-#     enable_auto_commit=True,
-#     consumer_timeout_ms=10000,
-#     value_deserializer=lambda x: json.loads(x.decode('utf-8')))
-
 # # Dictionary to map numeric labels to sentiment text
 # label_to_sentiment = {0: "Neutral", 1: "Positive", 2: "Negative", 3: "Irrelevant"}
 # sentiment_mapping_udf = udf(lambda x: label_to_sentiment[x], StringType())
-
-# # Clean the content by removing non-alphabetic characters and converting to lowercase
-# def clean_content(content):
-#     cleaned_content = re.sub(r'[^a-zA-Z\s]', '', content)
-#     cleaned_content = cleaned_content.lower()
-#     return cleaned_content
 
 # # Define the softmax function
 # def softmax(raw_predictions):
@@ -78,21 +65,21 @@
 #     try:
 #         data = message.value
 #         logger.info(f"Received message: {data}")
-#         # data.update({"Cleaned Content":clean_content(data['Content'])})
 #         df = spark.createDataFrame([data])
 #         predictions = svm_model.transform(df)
 #         logger.info("predict success")
-#         predictions = predictions.withColumn('Softmax', softmax_udf(vector_to_array(predictions['rawPrediction'])))
-#         predictions = predictions.withColumn('Confidence Score', get_softmax_at_index_udf(col('Softmax'), col('svm_prediction').cast("int")))
-#         predictions = predictions.withColumn('Predicted Sentiment', sentiment_mapping_udf(predictions['svm_prediction']))
+#         # predictions = predictions.withColumn('Softmax', softmax_udf(vector_to_array(predictions['rawPrediction'])))
+#         # predictions = predictions.withColumn('Confidence Score', get_softmax_at_index_udf(col('rawPrediction'), col('svm_prediction').cast("int")))
+#         predictions = predictions.withColumn('Confidence_Score', lit(100))
+#         predictions = predictions.withColumn('Predicted_Sentiment', sentiment_mapping_udf(predictions['svm_prediction']))
         
 #         # Select and rename columns
 #         predicted_data = predictions.select(
 #             col('ID'),
 #             col('Entity'),
 #             col('Content'),
-#             col('Predicted Sentiment').alias('Predicted_Sentiment'),
-#             col('Confidence Score').alias('Confidence_Score')
+#             col('Predicted_Sentiment'),
+#             col('Confidence_Score')
 #         )
         
 #         # Convert the DataFrame to a dictionary
@@ -112,7 +99,7 @@
 # spark.stop()
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, udf, from_json
+from pyspark.sql.functions import col, udf, from_json, lit
 from pyspark.sql.types import StructType, StructField, StringType, FloatType, ArrayType, DoubleType
 from pyspark.ml import PipelineModel
 from pyspark.ml.functions import vector_to_array
@@ -132,15 +119,8 @@ logger = logging.getLogger(__name__)
 kafka_server = 'kafka:9092'
 mongo_host = 'host.docker.internal'  # Connect to MongoDB running on the host machine
 
-conf = SparkConf() \
-    .set("spark.executor.memory", "4g") \
-    .set("spark.driver.memory", "4g") \
-    .set("spark.network.timeout", "600s") \
-    .set("spark.executor.heartbeatInterval", "60s")
-
 spark = SparkSession.builder \
     .appName("KafkaStreamWithMLPredictions") \
-    .config(conf=conf) \
     .getOrCreate()
 
 # Load pre-trained SVM model
@@ -196,19 +176,17 @@ parsed_stream = kafka_stream.selectExpr("CAST(value AS STRING)") \
 predictions = svm_model.transform(parsed_stream)
 
 # Convert raw predictions to softmax probabilities and calculate confidence score
-predictions = predictions.withColumn('Softmax', softmax_udf(vector_to_array(predictions['rawPrediction'])))
-predictions = predictions.withColumn('Confidence Score', get_softmax_at_index_udf(col('Softmax'), col('svm_prediction').cast("int")))
-predictions = predictions.withColumn('Predicted Sentiment', sentiment_mapping_udf(predictions['svm_prediction']))
+predictions = predictions.withColumn('Confidence_Score', lit(100))
+predictions = predictions.withColumn('Predicted_Sentiment', sentiment_mapping_udf(predictions['svm_prediction']))
 
 # Select necessary columns for storage
 predicted_data = predictions.select(
     col('ID').alias('ID'),
     col('Entity'),
     col('Content'),
-    col('Predicted Sentiment').alias('Predicted_Sentiment'),
-    col('Confidence Score').alias('Confidence_Score')
+    col('Predicted_Sentiment'),
+    col('Confidence_Score')
 )
-
 # Define a function to save the results to MongoDB
 def save_to_mongo(df, epoch_id):
     predicted_data_dict = [row.asDict() for row in df.collect()]
