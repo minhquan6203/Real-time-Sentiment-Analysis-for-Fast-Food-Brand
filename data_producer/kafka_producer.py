@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 from time import sleep
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,14 +39,21 @@ producer = KafkaProducer(
     value_serializer=lambda x: json.dumps(x).encode('utf-8')
 )
 
-with open('data.csv', 'r') as file:
+def clean_content(content):
+    cleaned_content = re.sub(r'[^a-zA-Z\s]', '', content)
+    cleaned_content = cleaned_content.lower()
+    return cleaned_content
+
+with open('data_fb.csv', 'r') as file:
     reader = csv.DictReader(file)
+    sleep(60)
     for row in reader:
         message = {
             "ID": int(row['ID']),
             "Entity": row['Entity'],
             # "Sentiment": row['Sentiment'],
-            "Content": row['Content']
+            "Content": row['Content'],
+            "Cleaned Content": clean_content(row['Content'])
         }
         producer.send(topic_name, value=message)
         # Uncomment the following line to log every message sent (can generate lots of logs)

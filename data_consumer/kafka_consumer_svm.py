@@ -7,6 +7,7 @@ from pyspark.sql.functions import col, udf, array
 from pyspark.ml import PipelineModel
 from pyspark.sql.types import ArrayType, FloatType, StringType, DoubleType
 from pyspark.ml.functions import vector_to_array
+from pyspark import SparkConf
 import numpy as np
 import re
 import os
@@ -19,14 +20,21 @@ logger = logging.getLogger(__name__)
 kafka_server = 'kafka:9092'
 mongo_host = 'host.docker.internal'  # Connect to MongoDB running on the host machine
 
-# Initialize Spark session
+conf = SparkConf() \
+    .set("spark.executor.memory", "4g") \
+    .set("spark.driver.memory", "4g") \
+    .set("spark.network.timeout", "600s") \
+    .set("spark.executor.heartbeatInterval", "60s")
+
 spark = SparkSession.builder \
     .appName("KafkaStreamWithMLPredictions") \
+    .config(conf=conf) \
     .getOrCreate()
 
 # Load pre-trained svm model
 svm_model_path = "/app/data_consumer/svm_model"
 svm_model = PipelineModel.load(svm_model_path)
+logger.info('load model success')
 
 # Connect to MongoDB using host.docker.internal
 mongo_client = MongoClient(f'mongodb://{mongo_host}:27017')
@@ -40,6 +48,7 @@ consumer = KafkaConsumer(
     auto_offset_reset='earliest',
     api_version=(0, 11, 5),
     enable_auto_commit=True,
+    consumer_timeout_ms=10000,
     value_deserializer=lambda x: json.loads(x.decode('utf-8')))
 
 # Dictionary to map numeric labels to sentiment text
@@ -69,10 +78,10 @@ for message in consumer:
     try:
         data = message.value
         logger.info(f"Received message: {data}")
-
-        data.update({"Cleaned Content":clean_content(data['Content'])})
+        # data.update({"Cleaned Content":clean_content(data['Content'])})
         df = spark.createDataFrame([data])
         predictions = svm_model.transform(df)
+        logger.info("predict success")
         predictions = predictions.withColumn('Softmax', softmax_udf(vector_to_array(predictions['rawPrediction'])))
         predictions = predictions.withColumn('Confidence Score', get_softmax_at_index_udf(col('Softmax'), col('svm_prediction').cast("int")))
         predictions = predictions.withColumn('Predicted Sentiment', sentiment_mapping_udf(predictions['svm_prediction']))
@@ -206,3 +215,4 @@ spark.stop()
 
 # # Cleanup Spark session
 # spark.stop()
+

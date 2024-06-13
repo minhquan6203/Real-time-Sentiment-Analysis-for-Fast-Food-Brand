@@ -58,7 +58,7 @@ df = df.selectExpr("json_tuple(value, 'ID', 'Entity', 'Content') as (ID, Entity,
 
 # Clean content
 clean_content_udf = udf(clean_content, StringType())
-df = df.withColumn("Cleaned_Content", clean_content_udf(col("Content")))
+df = df.withColumn("Cleaned Content", clean_content_udf(col("Content")))
 
 # Make predictions
 predictions = svm_model.transform(df)
