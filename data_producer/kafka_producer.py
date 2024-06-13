@@ -46,7 +46,7 @@ def clean_content(content):
 
 with open('data_fb.csv', 'r') as file:
     reader = csv.DictReader(file)
-    sleep(60)
+    sleep(90)
     for row in reader:
         message = {
             "ID": int(row['ID']),
