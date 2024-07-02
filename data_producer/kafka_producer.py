@@ -5,6 +5,7 @@ import json
 import logging
 from time import sleep
 import re
+import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -44,21 +45,27 @@ def clean_content(content):
     cleaned_content = cleaned_content.lower()
     return cleaned_content
 
-with open('data_fb.csv', 'r') as file:
+with open('all_comments.csv', 'r') as file:
     reader = csv.DictReader(file)
+    data = list(reader)
+    random.shuffle(data)
     sleep(90)
-    for row in reader:
+    for row in data:
         message = {
             "ID": int(row['ID']),
             "Entity": row['Entity'],
             # "Sentiment": row['Sentiment'],
             "Content": row['Content'],
-            "Cleaned Content": clean_content(row['Content'])
+            "Cleaned Content": clean_content(row['Content']),
+            "ID_Comment": row['ID_Comment'],
+            "ID_User": row['ID_User'],
+            "Comment_Like": row['Comment_Like'],
+            "Date": row['Date']
         }
         producer.send(topic_name, value=message)
         # Uncomment the following line to log every message sent (can generate lots of logs)
-        logger.info(f"Produced message: {message}")
-        sleep(1)
+        logger.info(f"Produced message comment of {row['Entity']}")
+        sleep(0.5)
 
 # Ensure all messages are sent
 producer.flush()

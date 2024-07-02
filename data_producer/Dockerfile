@@ -4,8 +4,12 @@ WORKDIR /app
 
 COPY kafka_producer.py /app
 COPY requirements.txt /app
-COPY Dataset/twitter_training.csv /app
-COPY Dataset/data_fb.csv /app
+# COPY Dataset/twitter_training.csv /app
+COPY Dataset/all_comments.csv /app
+COPY Dataset/KFC.csv /app
+COPY Dataset/DominosPizza.csv /app
+COPY Dataset/Subway.csv app
+COPY Dataset/McDonalds.csv app
 
 RUN pip install --no-cache-dir -r requirements.txt
 
